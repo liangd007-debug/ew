@@ -1,71 +1,64 @@
 #include "ssocksd_pro.h"
 
-MIC_THREAD_FUN_DEF(check_and_tunnel,socket_desc) {
-//void *check_and_tunnel(void *socket_desc) {
-    //Get the socket descriptor
-    int sock = *(int*)socket_desc;
-    int read_size,write_size;
-    char *message , client_message[2000];
+/* one local SOCKS5 session */
+MIC_THREAD_FUN_DEF(check_and_tunnel,parm){
+    int sock = *(int *)parm;
     int client_sock;
-    //Receive a message from client
-    //read_size = recv(sock , client_message , 2000 , 0);
+
+    free(parm);     /* socket number was handed over on heap */
     MIC_USLEEP(1);
+
     client_sock = socks_build_target_socket(sock);
-    //client_sock = get_connect_socket("127.0.0.1",8090);
-    if ( client_sock != SOCKS_BUILD_TARGET_SOCKET_ERROR ){
-        tunn_sock_to_sock(client_sock,sock, API_get_usec_time());
+    if(client_sock != SOCKS_BUILD_TARGET_SOCKET_ERROR){
+        tunn_sock_to_sock(client_sock, sock, API_get_usec_time());
     }
     else{
-        //printf("client_sock == -1\n");
         API_socket_close(sock);
     }
-    //printf("close check_and tunnel now ??socket= %d??\n",sock);
     MIC_THREAD_END();
-//  pthread_detach(pthread_self());
-    // mclose(sock);
-    return NULL;
+    return 0;
 }
 
-
-
+/* forward SOCKS5 server: -s ssocksd -l 1080 */
 int create_ssocksd_server(int port,int usec){
-    int socket_desc , client_sock , c;
-    int sockbuf;
-    struct sockaddr_in server , client;
-    API_set_usec_time(usec);
-    socket_desc = API_socket_init_server(port,300);
-    c = sizeof(struct sockaddr_in);
-    printf("ssocksd 0.0.0.0:%d <--[%4d usec]--> socks server\n",
-    port , API_get_usec_time());
-    //Accept and incoming connection
-    // puts("Waiting for incoming connections...");
+    int socket_desc, client_sock, c;
+    struct sockaddr_in client;
     MIC_THREAD_HANDLE_ID thread_id;
-    while( (client_sock = accept(socket_desc, (struct sockaddr *)&client, (socklen_t*)&c))>=0 )
-    {
-        // puts("Connection accepted");
-        sockbuf = client_sock;
-        //printf("new check_and_tunnel now socket=%d\n",sockbuf);
-        if( MIC_THREAD_CREATE ( thread_id,check_and_tunnel,
-            &sockbuf) < 0 ) {
-//        if( pthread_create( &thread_id , NULL , check_and_tunnel , (void*) &sockbuf) < 0) {
-            API_socket_close(sockbuf);
-            puts("could not create thread");
-            return CREATE_SSOCKSD_SERVER_ERROR;
-        }
-        client_sock = -1;
-        MIC_USLEEP(1);
-//#ifndef __APPLE__
-//        MIC_THREAD_JOIN( thread_id );
-//#endif
-        //Now join the thread , so that we dont terminate before the thread
-        // pthread_join( thread_id , NULL);
-        // puts("Handler assigned");
-    }
-    if (client_sock < 0)
-    {
-        puts("accept failed");
+
+    API_set_usec_time(usec);
+    socket_desc = API_socket_init_server(port, 300);
+    if(socket_desc == SOCKET_SERVER_INIT_ERROR){
         return CREATE_SSOCKSD_SERVER_ERROR;
     }
-    printf("ssocksd close ?????\n");
+    c = sizeof(struct sockaddr_in);
+    printf("正向 SOCKS5  0.0.0.0:%d <--[%4d 毫秒]-->\n",
+           port, API_get_usec_time());
+
+    while(1){
+        client_sock = accept(socket_desc, (struct sockaddr *)&client,
+                             (socklen_t *)&c);
+        if(client_sock < 0){
+            puts("连接接入失败, 稍候重试");
+            MIC_USLEEP(100);
+            continue;
+        }
+        /* hand the socket number to the worker on the heap,
+         * the old &stack_variable way raced with the next accept() */
+        {
+            int *sockbuf = (int *)malloc(sizeof(int));
+            if(sockbuf == NULL){
+                API_socket_close(client_sock);
+                continue;
+            }
+            *sockbuf = client_sock;
+            if(MIC_THREAD_CREATE(thread_id, check_and_tunnel, sockbuf)){
+                API_socket_close(client_sock);
+                free(sockbuf);
+                puts("创建工作线程失败");
+                continue;
+            }
+        }
+        MIC_USLEEP(1);
+    }
     return CREATE_SSOCKSD_SERVER_OK;
 }

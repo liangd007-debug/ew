@@ -3,18 +3,15 @@
 
 #include "generic.h"
 
-#define  SOCKS_BUILD_TARGET_SOCKET_ERROR   -1
+#define SOCKS_BUILD_TARGET_SOCKET_ERROR   -1
 
 struct rcsocktul{
     char URL[300];
     int port;
-    char poolnum;   
+    int poolnum;    /* pool id carried from the cmd channel, must be int */
 };
 
-
-int socks_build_target_socket(int cmd_sock);
-//void *socks_check_and_tunnel(void *sock);
-
+int socks_build_target_socket(int sock);
 int socks_build_rcsocks_tunnel(void *sock);
 
 #endif
